@@ -119,8 +119,10 @@ export default function DashboardPage() {
     try {
       const list = await getChatSessions()
       setSessions(list || [])
+      return list || []
     } catch (err) {
       console.error('Failed to load chat history sessions:', err)
+      return []
     }
   }
 
@@ -177,11 +179,14 @@ export default function DashboardPage() {
   // Load sessions list and restore active session on component mount / user change
   useEffect(() => {
     if (user) {
-      loadSessionsList().then(() => {
+      loadSessionsList().then((list) => {
         if (typeof window !== 'undefined') {
           const savedSessionId = localStorage.getItem('active_session_id')
-          if (savedSessionId) {
+          if (savedSessionId && list.some((s: any) => s.session_id === savedSessionId)) {
             loadSession(savedSessionId)
+          } else if (savedSessionId) {
+            // Clear invalid session ID from local storage
+            localStorage.removeItem('active_session_id')
           }
         }
       })

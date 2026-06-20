@@ -58,6 +58,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = () => {
     apiLogout()
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('active_session_id')
+    }
     setUser(null)
   }
 

@@ -2,11 +2,13 @@
 
 import { useState, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import Link from 'next/link'
 import { resendVerification } from '@/lib/api'
+import { useAuth } from '@/components/AuthContext'
 
 function VerifyEmailPendingContent() {
+  const router = useRouter()
   const searchParams = useSearchParams()
+  const { logout } = useAuth()
   const email = searchParams.get('email') || ''
   const [resending, setResending] = useState(false)
   const [success, setSuccess] = useState('')
@@ -69,9 +71,15 @@ function VerifyEmailPendingContent() {
       </button>
 
       <div className="text-center mt-6">
-        <Link href="/login" className="text-sm text-violet-400 hover:text-violet-300 transition-colors">
+        <button 
+          onClick={() => {
+            logout()
+            router.push('/login')
+          }}
+          className="text-sm text-violet-400 hover:text-violet-300 transition-colors bg-transparent border-none cursor-pointer"
+        >
           Back to Sign In
-        </Link>
+        </button>
       </div>
     </div>
   )
