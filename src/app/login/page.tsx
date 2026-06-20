@@ -27,39 +27,103 @@ export default function LoginPage() {
   useEffect(() => {
     if (typeof window === 'undefined') return
 
+    let active = true
+    let timeoutId: any = null
+    let pollIntervalId: any = null
+
     const initializeGoogle = () => {
+      if (!active) return
       const google = (window as any).google
       if (google?.accounts?.id) {
-        google.accounts.id.initialize({
-          client_id: GOOGLE_CLIENT_ID,
-          callback: handleGoogleCallback,
-        })
-        google.accounts.id.renderButton(
-          document.getElementById('google-signin-btn'),
-          {
-            theme: 'filled_black',
-            size: 'large',
-            width: '100%',
-            text: 'continue_with',
-            shape: 'pill',
+        // Clear polling if any
+        if (pollIntervalId) {
+          clearInterval(pollIntervalId)
+          pollIntervalId = null
+        }
+
+        try {
+          google.accounts.id.initialize({
+            client_id: GOOGLE_CLIENT_ID,
+            callback: handleGoogleCallback,
+          })
+        } catch (e) {
+          console.error('Google accounts initialize error:', e)
+        }
+        
+        const render = () => {
+          if (!active) return
+          const targetBtn = document.getElementById('google-signin-btn')
+          if (targetBtn) {
+            // Check if already has children to prevent duplicate buttons
+            if (targetBtn.children.length === 0) {
+              try {
+                google.accounts.id.renderButton(
+                  targetBtn,
+                  {
+                    theme: 'filled_black',
+                    size: 'large',
+                    width: '100%',
+                    text: 'continue_with',
+                    shape: 'pill',
+                  }
+                )
+              } catch (e) {
+                console.error('Google renderButton error:', e)
+              }
+            }
+            setGoogleLoaded(true)
+          } else {
+            timeoutId = setTimeout(render, 50)
           }
-        )
-        setGoogleLoaded(true)
+        }
+        render()
       }
     }
 
-    if (document.getElementById('google-gsi')) {
-      initializeGoogle()
-      return
+    const scriptId = 'google-gsi'
+    let script = document.getElementById(scriptId) as HTMLScriptElement | null
+
+    if (script) {
+      const google = (window as any).google
+      if (google?.accounts?.id) {
+        initializeGoogle()
+      } else {
+        // Script exists but google is not defined yet (still loading or loaded but initializing)
+        script.addEventListener('load', initializeGoogle)
+        // Polling fallback to be absolutely sure
+        pollIntervalId = setInterval(() => {
+          const google = (window as any).google
+          if (google?.accounts?.id) {
+            initializeGoogle()
+          }
+        }, 100)
+      }
+    } else {
+      script = document.createElement('script')
+      script.id = scriptId
+      script.src = 'https://accounts.google.com/gsi/client?hl=en'
+      script.async = true
+      script.defer = true
+      script.onload = initializeGoogle
+      document.head.appendChild(script)
+      
+      // Polling fallback to be absolutely sure
+      pollIntervalId = setInterval(() => {
+        const google = (window as any).google
+        if (google?.accounts?.id) {
+          initializeGoogle()
+        }
+      }, 100)
     }
 
-    const script = document.createElement('script')
-    script.id = 'google-gsi'
-    script.src = 'https://accounts.google.com/gsi/client?hl=en'
-    script.async = true
-    script.defer = true
-    script.onload = initializeGoogle
-    document.head.appendChild(script)
+    return () => {
+      active = false
+      if (timeoutId) clearTimeout(timeoutId)
+      if (pollIntervalId) clearInterval(pollIntervalId)
+      if (script) {
+        script.removeEventListener('load', initializeGoogle)
+      }
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
