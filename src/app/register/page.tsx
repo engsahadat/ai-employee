@@ -155,7 +155,7 @@ export default function RegisterPage() {
     setSubmitting(true)
     try {
       await apiRegister(name, email, password)
-      router.push(`/verify-email-pending?email=${encodeURIComponent(email)}`)
+      router.push(`/dashboard`)
     } catch (err: any) {
       setError(err.message || 'Registration failed')
     } finally {
