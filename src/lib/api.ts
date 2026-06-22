@@ -131,13 +131,97 @@ export interface ChatMessage {
   };
 }
 
+export async function streamChatMessage(
+  message: string,
+  file: { data: string; mime_type: string; name: string } | undefined,
+  sessionId: string | undefined,
+  onChunk: (text: string) => void,
+  onDone: (sessionId: string) => void,
+  onError: (error: string) => void
+): Promise<void> {
+  let res: Response
+  try {
+    res = await fetch(`${API_BASE}/chat`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ message, file, session_id: sessionId }),
+    })
+  } catch (err: any) {
+    onError('Cannot reach the server. Please check your internet connection.')
+    return
+  }
+
+  if (!res.ok) {
+    let errorMsg = 'Something went wrong. Please try again.'
+    try {
+      const data = await res.json()
+      const raw: string = data.error || ''
+      if (raw.includes('API key') || raw.includes('not configured')) {
+        errorMsg = 'The AI service is not configured correctly. Please contact support.'
+      } else if (res.status === 429) {
+        errorMsg = 'You are sending messages too fast. Please wait a moment and try again.'
+      } else if (res.status >= 500) {
+        errorMsg = 'The AI service encountered an error. Please try again shortly.'
+      }
+    } catch {}
+    onError(errorMsg)
+    return
+  }
+
+  if (!res.body) {
+    onError('No response from server.')
+    return
+  }
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed.startsWith('data: ')) continue
+        const jsonStr = trimmed.slice(6).trim()
+        if (!jsonStr) continue
+
+        try {
+          const data = JSON.parse(jsonStr)
+          if (typeof data.text === 'string' && data.text) {
+            onChunk(data.text)
+          }
+          if (data.done === 'true' && data.session_id) {
+            onDone(data.session_id)
+          }
+        } catch {}
+      }
+    }
+  } catch {
+    onError('Connection interrupted. Please try again.')
+  }
+}
+
+// Legacy non-streaming send (kept for compatibility)
 export async function sendChatMessage(message: string, file?: FileData, sessionId?: string): Promise<{ reply: string; session_id: string }> {
-  const res = await fetch(`${API_BASE}/chat`, {
-    method: 'POST',
-    headers: authHeaders(),
-    body: JSON.stringify({ message, file, session_id: sessionId }),
-  });
-  return handleResponse(res, 'Chat failed');
+  return new Promise((resolve, reject) => {
+    let reply = ''
+    let sid = sessionId || ''
+    streamChatMessage(
+      message,
+      file ? { data: (file as any).data, mime_type: file.mime_type, name: '' } : undefined,
+      sessionId,
+      (text) => { reply += text },
+      (newSid) => { sid = newSid; resolve({ reply, session_id: sid }) },
+      (err) => reject(new Error(err))
+    )
+  })
 }
 
 export async function getChatSessions(): Promise<ChatSession[]> {

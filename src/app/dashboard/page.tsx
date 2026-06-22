@@ -3,8 +3,10 @@
 import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/components/AuthContext'
-import { sendChatMessage, getChatSessions, getChatSessionHistory, deleteChatSession, ChatSession, ChatMessage } from '@/lib/api'
+import { sendChatMessage, streamChatMessage, getChatSessions, getChatSessionHistory, deleteChatSession, ChatSession, ChatMessage } from '@/lib/api'
 import Logo from '@/components/Logo'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
@@ -40,46 +42,79 @@ function CopyButton({ text }: { text: string }) {
   )
 }
 
-// Helper function to parse markdown images ![alt](url) and return JSX
-function parseMessageContent(content: string) {
+// Renders assistant markdown responses properly with full formatting support
+function MarkdownContent({ content }: { content: string }) {
   if (!content) return null
-
-  // Regex to match markdown images: ![alt](url)
-  const imageRegex = /!\[([^\]]*)\]\(([^)]+)\)/g
-  const parts = []
-  let lastIndex = 0
-  let match
-
-  while ((match = imageRegex.exec(content)) !== null) {
-    const textBefore = content.substring(lastIndex, match.index)
-    const altText = match[1]
-    const imageUrl = match[2]
-
-    if (textBefore) {
-      parts.push(<span key={`text-${lastIndex}`}>{textBefore}</span>)
-    }
-
-    parts.push(
-      <div key={`img-${match.index}`} className="my-3 rounded-2xl overflow-hidden border border-white/10 shadow-lg bg-[#0e0f1e] max-w-lg">
-        <img
-          src={imageUrl}
-          alt={altText || 'AI Generated Image'}
-          className="w-full h-auto object-cover max-h-[450px] transition-all duration-300 hover:scale-[1.01] cursor-pointer"
-          loading="lazy"
-          onClick={() => window.open(imageUrl, '_blank')}
-        />
-      </div>
-    )
-
-    lastIndex = imageRegex.lastIndex
-  }
-
-  const textAfter = content.substring(lastIndex)
-  if (textAfter) {
-    parts.push(<span key={`text-${lastIndex}`}>{textAfter}</span>)
-  }
-
-  return parts.length > 0 ? parts : content
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        // Headings
+        h1: ({ children }) => <h1 className="text-xl font-bold text-white mt-4 mb-2 border-b border-white/10 pb-1">{children}</h1>,
+        h2: ({ children }) => <h2 className="text-lg font-bold text-gray-100 mt-3 mb-1.5">{children}</h2>,
+        h3: ({ children }) => <h3 className="text-base font-semibold text-gray-200 mt-2 mb-1">{children}</h3>,
+        // Paragraphs — use div to avoid hydration error when <pre> or <div> is nested inside
+        p: ({ children }) => <div className="mb-2 last:mb-0 leading-relaxed text-gray-200">{children}</div>,
+        // Bold / italic
+        strong: ({ children }) => <strong className="font-semibold text-white">{children}</strong>,
+        em: ({ children }) => <em className="italic text-gray-300">{children}</em>,
+        // Inline code
+        code: ({ inline, className, children, ...props }: any) => {
+          if (inline) {
+            return (
+              <code className="bg-[#0d0c1f] border border-white/10 text-violet-300 rounded px-1.5 py-0.5 text-[0.82em] font-mono" {...props}>
+                {children}
+              </code>
+            )
+          }
+          return (
+            <div className="relative group/code my-3">
+              <pre className="bg-[#0a0919] border border-white/10 rounded-xl p-4 overflow-x-auto text-sm font-mono text-gray-300 leading-relaxed">
+                <code className={className} {...props}>{children}</code>
+              </pre>
+            </div>
+          )
+        },
+        // Blockquote
+        blockquote: ({ children }) => (
+          <blockquote className="border-l-4 border-violet-500/60 pl-4 my-3 text-gray-400 italic">{children}</blockquote>
+        ),
+        // Lists
+        ul: ({ children }) => <ul className="list-disc list-inside space-y-1 my-2 text-gray-200 pl-2">{children}</ul>,
+        ol: ({ children }) => <ol className="list-decimal list-inside space-y-1 my-2 text-gray-200 pl-2">{children}</ol>,
+        li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+        // Links
+        a: ({ href, children }) => (
+          <a href={href} target="_blank" rel="noopener noreferrer" className="text-violet-400 underline hover:text-violet-300 transition-colors">{children}</a>
+        ),
+        // Images
+        img: ({ src, alt }) => (
+          <div className="my-3 rounded-2xl overflow-hidden border border-white/10 shadow-lg bg-[#0e0f1e] max-w-lg">
+            <img
+              src={src}
+              alt={alt || 'AI Generated Image'}
+              className="w-full h-auto object-cover max-h-[450px] transition-all duration-300 hover:scale-[1.01] cursor-pointer"
+              loading="lazy"
+              onClick={() => src && window.open(src, '_blank')}
+            />
+          </div>
+        ),
+        // Table
+        table: ({ children }) => (
+          <div className="overflow-x-auto my-3">
+            <table className="w-full border-collapse text-sm text-gray-300">{children}</table>
+          </div>
+        ),
+        thead: ({ children }) => <thead className="bg-white/5">{children}</thead>,
+        th: ({ children }) => <th className="border border-white/10 px-3 py-2 text-left font-semibold text-gray-200">{children}</th>,
+        td: ({ children }) => <td className="border border-white/10 px-3 py-2">{children}</td>,
+        // Horizontal rule
+        hr: () => <hr className="border-white/10 my-4" />,
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  )
 }
 
 export default function DashboardPage() {
@@ -88,9 +123,11 @@ export default function DashboardPage() {
   const [message, setMessage] = useState('')
   const [chat, setChat] = useState<{ role: string; content: string; file?: { name: string; type: string; url: string } }[]>([])
   const [sending, setSending] = useState(false)
+  const [isStreaming, setIsStreaming] = useState(false)
   const [attachedFile, setAttachedFile] = useState<{ name: string; type: string; base64: string; previewUrl: string } | null>(null)
   const [isListening, setIsListening] = useState(false)
   const [recognition, setRecognition] = useState<any>(null)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
   // Chat History Sidebar states
   const [sessions, setSessions] = useState<ChatSession[]>([])
@@ -101,7 +138,14 @@ export default function DashboardPage() {
   // Auto-scroll to bottom of chat
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [chat, sending])
+  }, [chat, sending, errorMsg])
+
+  // Auto-dismiss error banner after 5 seconds
+  useEffect(() => {
+    if (!errorMsg) return
+    const timer = setTimeout(() => setErrorMsg(null), 5000)
+    return () => clearTimeout(timer)
+  }, [errorMsg])
 
   // Redirect if not authenticated or unverified.
   useEffect(() => {
@@ -267,52 +311,71 @@ export default function DashboardPage() {
 
   const handleSend = async () => {
     if (!message.trim() && !attachedFile) return
-    
+
     const fileToSend = attachedFile
-      ? {
-          name: attachedFile.name,
-          type: attachedFile.type,
-          url: attachedFile.previewUrl
-        }
+      ? { name: attachedFile.name, type: attachedFile.type, url: attachedFile.previewUrl }
       : undefined
 
     const userMsg = { role: 'user', content: message, file: fileToSend }
-    setChat((prev) => [...prev, userMsg])
-    
+    setChat(prev => [...prev, userMsg])
+
     const apiFileParam = attachedFile
-      ? {
-          data: attachedFile.base64,
-          mime_type: attachedFile.type,
-          name: attachedFile.name
-        }
+      ? { data: attachedFile.base64, mime_type: attachedFile.type, name: attachedFile.name }
       : undefined
 
     const currentMsgText = message
     setMessage('')
     setAttachedFile(null)
-    setSending(true)
+    setSending(true)     // show thinking dots
+    setIsStreaming(true)
+    setErrorMsg(null)
 
-    try {
-      const res = await sendChatMessage(currentMsgText, apiFileParam, activeSessionId || undefined)
-      
-      // If this was a new chat session, set the active session ID and reload the sidebar
-      if (!activeSessionId) {
-        setActiveSessionId(res.session_id)
-        if (typeof window !== 'undefined') {
-          localStorage.setItem('active_session_id', res.session_id)
+    // Add empty assistant placeholder immediately
+    setChat(prev => [...prev, { role: 'assistant', content: '' }])
+
+    await streamChatMessage(
+      currentMsgText,
+      apiFileParam,
+      activeSessionId || undefined,
+      // onChunk — append text to last assistant message
+      (text) => {
+        setSending(false) // hide thinking dots on first token
+        setChat(prev => {
+          const updated = [...prev]
+          const last = updated[updated.length - 1]
+          if (last?.role === 'assistant') {
+            return [...updated.slice(0, -1), { ...last, content: last.content + text }]
+          }
+          return updated
+        })
+      },
+      // onDone
+      (newSessionId) => {
+        if (!activeSessionId) {
+          setActiveSessionId(newSessionId)
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('active_session_id', newSessionId)
+          }
+          loadSessionsList()
         }
-        loadSessionsList()
+        setIsStreaming(false)
+        setSending(false)
+      },
+      // onError
+      (error) => {
+        // Remove empty placeholder on error
+        setChat(prev => {
+          const updated = [...prev]
+          if (updated[updated.length - 1]?.role === 'assistant' && updated[updated.length - 1]?.content === '') {
+            return updated.slice(0, -1)
+          }
+          return updated
+        })
+        setErrorMsg(error)
+        setSending(false)
+        setIsStreaming(false)
       }
-      
-      setChat((prev) => [...prev, { role: 'assistant', content: res.reply }])
-    } catch (err: any) {
-      setChat((prev) => [
-        ...prev,
-        { role: 'assistant', content: `⚠️ Error: ${err.message || 'Server not connected. Check backend server running on :8080.'}` },
-      ])
-    } finally {
-      setSending(false)
-    }
+    )
   }
 
   const handleLogout = () => {
@@ -490,16 +553,35 @@ export default function DashboardPage() {
                 )}
 
                 {/* Text message bubble */}
-                {(msg.content || !msg.file) && (
+                {(msg.content !== undefined || !msg.file) && (
                   <div
-                    className={`px-4 py-2.5 md:px-5 md:py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap relative group ${
+                    className={`px-4 py-2.5 md:px-5 md:py-3 rounded-2xl text-sm leading-relaxed relative group ${
                       msg.role === 'user'
-                        ? 'bg-gradient-to-r from-violet-600 to-indigo-600 text-white rounded-tr-sm shadow-md shadow-violet-600/20'
+                        ? 'bg-gradient-to-r from-violet-600 to-indigo-600 text-white rounded-tr-sm shadow-md shadow-violet-600/20 whitespace-pre-wrap'
                         : 'bg-[#121124] text-gray-200 rounded-bl-sm border border-[#262347] shadow-md pr-10'
                     }`}
                   >
-                    {parseMessageContent(msg.content)}
-                    {msg.role === 'assistant' && msg.content && (
+                    {msg.role === 'assistant' ? (
+                      msg.content === '' && isStreaming && i === chat.length - 1 ? (
+                        // Thinking dots — shown inside the bubble while waiting for first token
+                        <div className="flex items-center gap-1.5 py-0.5">
+                          <span className="w-2 h-2 rounded-full bg-violet-400 animate-bounce" style={{ animationDelay: '0ms' }} />
+                          <span className="w-2 h-2 rounded-full bg-violet-400 animate-bounce" style={{ animationDelay: '150ms' }} />
+                          <span className="w-2 h-2 rounded-full bg-violet-400 animate-bounce" style={{ animationDelay: '300ms' }} />
+                        </div>
+                      ) : (
+                        <>
+                          <MarkdownContent content={msg.content} />
+                          {/* Streaming cursor — shows while text is being written */}
+                          {isStreaming && i === chat.length - 1 && (
+                            <span className="inline-block w-0.5 h-[1em] bg-violet-400 ml-0.5 animate-pulse align-middle" />
+                          )}
+                        </>
+                      )
+                    ) : (
+                      msg.content
+                    )}
+                    {msg.role === 'assistant' && msg.content && !isStreaming && (
                       <CopyButton text={msg.content} />
                     )}
                   </div>
@@ -507,12 +589,28 @@ export default function DashboardPage() {
               </div>
             </div>
           ))}
-          {sending && (
-            <div className="flex justify-start">
-              <div className="bg-[#121124] border border-[#262347] px-5 py-3.5 rounded-2xl rounded-bl-sm flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-violet-500 animate-bounce" style={{ animationDelay: '0ms' }} />
-                <span className="w-2 h-2 rounded-full bg-violet-500 animate-bounce" style={{ animationDelay: '150ms' }} />
-                <span className="w-2 h-2 rounded-full bg-violet-500 animate-bounce" style={{ animationDelay: '300ms' }} />
+
+          {/* Error banner — shown above the input, auto-dismisses */}
+          {errorMsg && (
+            <div className="flex justify-start animate-in fade-in slide-in-from-bottom-2 duration-300">
+              <div className="flex items-start gap-3 max-w-[85%] md:max-w-[80%] bg-[#1e0f0f] border border-red-500/30 text-red-300 rounded-2xl rounded-bl-sm px-4 py-3 shadow-lg">
+                <span className="text-lg mt-0.5 shrink-0">⚠️</span>
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-red-200">{errorMsg}</p>
+                  <button
+                    onClick={() => setErrorMsg(null)}
+                    className="mt-1.5 text-xs text-red-400/70 hover:text-red-300 underline transition-colors"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+                <button
+                  onClick={() => setErrorMsg(null)}
+                  className="shrink-0 text-red-400/50 hover:text-red-300 transition-colors text-lg leading-none mt-0.5"
+                  aria-label="Dismiss error"
+                >
+                  ×
+                </button>
               </div>
             </div>
           )}
